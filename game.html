@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="en">
+	<head>
+		<title>three.js touchscreen fps</title>
+		<meta charset=utf-8 />
+		<meta name="viewport" content="width=device-height, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
+		<link type="text/css" rel="stylesheet" href="./CSS/main.css">
+		<script src="https://code.jquery.com/jquery-3.6.0.min.js" integrity="sha256-/xUj+3OJU5yExlq6GSYGSHk7tPXikynS7ogEvDej/m4=" crossorigin="anonymous"></script>
+	</head>
+	<body>
+		
+		<div id="container"></div>
+
+		<div id="stick1Container">
+			<img src="images/joystick-base.png" class="baseImage">
+				<div id="stick1">
+				<img src="images/joystick-red.png" class="stickImage">		
+				</div>
+		</div>
+		
+		<div id="stick2Container">
+			<img src="images/joystick-base.png" class="baseImage">
+			<div id="stick2">
+			<img src="images/joystick-blue.png" class="stickImage">		
+			</div>
+		</div>
+
+		<div id="startTimer">
+			0
+		</div>
+
+		<div id="overlay">
+			<button id="fullscreen" class="d1Button">Turn on Fullscreen mode</button>
+		</div>
+
+		
+
+		<script type="module">
+
+			import * as THREE from '../build/three.module.js';
+			import {DRACOLoader} from '../jsm/DRACOLoader.js';
+			import {GLTFLoader} from '../jsm/GLTFLoader.js';
+
+			class JoystickController
+			{
+				// stickID: ID of HTML element (representing joystick) that will be dragged
+				// maxDistance: maximum amount joystick can move in any direction
+				// deadzone: joystick must move at least this amount from origin to register value change
+				constructor( stickID, maxDistance, deadzone )
+				{
+					this.id = stickID;
+					let stick = document.getElementById(stickID);
+
+					// location from which drag begins, used to calculate offsets
+					this.dragStart = null;
+
+					// track touch identifier in case multiple joysticks present
+					this.touchId = null;
+					
+					this.active = false;
+					this.value = { x: 0, y: 0 }; 
+
+					let self = this;
+
+					function handleDown(event)
+					{
+						self.active = true;
+
+						// all drag movements are instantaneous
+						stick.style.transition = '0s';
+
+						// touch event fired before mouse event; prevent redundant mouse event from firing
+						event.preventDefault();
+
+						if (event.changedTouches)
+							self.dragStart = { x: event.changedTouches[0].clientX, y: event.changedTouches[0].clientY };
+						else
+							self.dragStart = { x: event.clientX, y: event.clientY };
+
+						// if this is a touch event, keep track of which one
+						if (event.changedTouches)
+							self.touchId = event.changedTouches[0].identifier;
+					}
+					
+					function handleMove(event) 
+					{
+						if ( !self.active ) return;
+
+						// if this is a touch event, make sure it is the right one
+						// also handle multiple simultaneous touchmove events
+						let touchmoveId = null;
+						if (event.changedTouches)
+						{
+							for (let i = 0; i < event.changedTouches.length; i++)
+							{
+								if (self.touchId == event.changedTouches[i].identifier)
+								{
+									touchmoveId = i;
+									event.clientX = event.changedTouches[i].clientX;
+									event.clientY = event.changedTouches[i].clientY;
+								}
+							}
+
+							if (touchmoveId == null) return;
+						}
+
+						const xDiff = event.clientX - self.dragStart.x;
+						const yDiff = event.clientY - self.dragStart.y;
+						const angle = Math.atan2(yDiff, xDiff);
+						const distance = Math.min(maxDistance, Math.hypot(xDiff, yDiff));
+						const xPosition = distance * Math.cos(angle);
+						const yPosition = distance * Math.sin(angle);
+
+						// move stick image to new position
+						stick.style.transform = `translate3d(${xPosition}px, ${yPosition}px, 0px)`;
+
+						// deadzone adjustment
+						const distance2 = (distance < deadzone) ? 0 : maxDistance / (maxDistance - deadzone) * (distance - deadzone);
+						const xPosition2 = distance2 * Math.cos(angle);
+						const yPosition2 = distance2 * Math.sin(angle);
+						const xPercent = parseFloat((xPosition2 / maxDistance).toFixed(4));
+						const yPercent = parseFloat((yPosition2 / maxDistance).toFixed(4));
+						
+						self.value = { x: xPercent, y: yPercent };
+					}
+
+					function handleUp(event) 
+					{
+						if ( !self.active ) return;
+
+						// if this is a touch event, make sure it is the right one
+						if (event.changedTouches && self.touchId != event.changedTouches[0].identifier) return;
+
+						// transition the joystick position back to center
+						stick.style.transition = '.2s';
+						stick.style.transform = `translate3d(0px, 0px, 0px)`;
+
+						// reset everything
+						self.value = { x: 0, y: 0 };
+						self.touchId = null;
+						self.active = false;
+					}
+
+					stick.addEventListener('mousedown', handleDown);
+					stick.addEventListener('touchstart', handleDown);
+					document.addEventListener('mousemove', handleMove, {passive: false});
+					document.addEventListener('touchmove', handleMove, {passive: false});
+					document.addEventListener('mouseup', handleUp);
+					document.addEventListener('touchend', handleUp);
+				}
+			}
+
+			let joystick1 = new JoystickController("stick1", 64, 8);
+			let joystick2 = new JoystickController("stick2", 64, 8);
+
+			const clock = new THREE.Clock();
+			const timer = new THREE.Clock( false )
+
+			const scene = new THREE.Scene();
+			scene.background = new THREE.Color( 0x88ccff );
+
+			const camera = new THREE.PerspectiveCamera( 65, screen.width / screen.height, 0.1, 30);
+			camera.rotation.order = 'YXZ';
+			let playerHeight = 1.5;
+			camera.position.y = playerHeight;
+			camera.position.z = 0;
+			scene.add(camera);
+
+			const cursorGeometry = new THREE.RingGeometry(0.0005, 0.001, 25);
+			const cursorMaterial = new THREE.MeshPhongMaterial({color: 0x000000, side: THREE.DoubleSide});
+			const cursor = new THREE.Mesh(cursorGeometry, cursorMaterial);
+
+			camera.add(cursor);
+			cursor.position.set(0, 0, -0.1)
+
+			const ambientlight = new THREE.AmbientLight( 0xFFFFFF, 10);
+			scene.add( ambientlight );
+
+			const renderer = new THREE.WebGLRenderer( { antialias: true } );
+			renderer.setPixelRatio( window.devicePixelRatio );
+			renderer.setSize( screen.width, screen.height);
+			renderer.outputEncoding = THREE.sRGBEncoding;
+			renderer.physicallyCorrectLights = true;
+			renderer.toneMapping = THREE.ACESFilmicToneMapping;
+			
+			
+			const directionalLight = new THREE.DirectionalLight( 0xffffaa, 1.2 );
+			directionalLight.position.set( - 20, 20, 0 );
+			
+			scene.add( directionalLight );
+
+			const container = document.getElementById( 'container' );
+			container.appendChild( renderer.domElement);
+
+			let overlay = $("#overlay");
+			let fullscreenButton = $("#fullscreen");
+			let body = $(document.body);
+
+			let elem = document.documentElement;
+
+			function openFullscreen() {
+				if (elem.requestFullscreen) {
+					elem.requestFullscreen();
+				} else if (elem.webkitRequestFullscreen) { /* Safari */
+					elem.webkitRequestFullscreen();
+				} else if (elem.msRequestFullscreen) { /* IE11 */
+					elem.msRequestFullscreen();
+				}
+			}
+
+			fullscreenButton.click(function(){
+				console.log("test");
+				overlay.css("display", "none");
+				openFullscreen();
+			})
+		
+			const playerVelocity = new THREE.Vector3();
+			const playerDirection = new THREE.Vector3();
+
+			function getForwardVector() {
+				camera.getWorldDirection( playerDirection );
+				playerDirection.y = 0;
+				playerDirection.normalize();
+				let currentCameraPos = new THREE.Vector3(camera.position.x, camera.position.y, camera.position.z);
+				raycaster.set(currentCameraPos, playerDirection);
+				return playerDirection;
+
+			}
+
+			function getSideVector() {
+				camera.getWorldDirection( playerDirection );
+				playerDirection.y = 0;
+				playerDirection.normalize();
+				playerDirection.cross( camera.up );
+				return playerDirection;
+
+			}
+
+			function update(deltaTime) {
+				const speed = -0.025;
+				camera.rotation.y -= joystick2.value.x/50 
+				camera.rotation.x -= joystick2.value.y/50
+
+				if (joystick1.value.y != 0){
+					camera.position.z += speed * -joystick1.value.y 
+				} 
+
+				if (joystick1.value.x != 0){
+					camera.position.x += speed * -joystick1.value.x
+				}
+
+				const damping = Math.exp( - 5 * deltaTime ) - 1;
+				playerVelocity.addScaledVector( playerVelocity, damping );
+			}
+
+			const loader = new GLTFLoader().setPath('./models/');
+			const dracoLoader = new DRACOLoader();
+			dracoLoader.setDecoderPath('./jsm/libs/draco/');
+			loader.setDRACOLoader( dracoLoader );
+
+			loader.load( 'scene.glb', ( gltf ) => {
+				scene.add( gltf.scene );
+				console.log(gltf);
+				let scale = 1;
+				gltf.scene.scale.set(scale, scale, scale);
+				gltf.scene.position.set(0, 0, 0);
+			});
+
+			function animate() {
+
+				
+				const deltaTime = Math.min( 0.1, clock.getDelta() );
+
+				update(deltaTime);
+					
+				renderer.render( scene, camera );
+			
+				requestAnimationFrame( animate );
+
+			}
+			animate();
+
+
+		</script>
+	</body>
+</html>
